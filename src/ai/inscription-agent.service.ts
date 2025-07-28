@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AIService } from './ai.service';
-import { PrismaService } from '../database/prisma.service';
+import { DatabaseService } from '../database/database.service';
 
 @Injectable()
 export class InscriptionAgentService {
@@ -8,12 +8,12 @@ export class InscriptionAgentService {
 
   constructor(
     private readonly aiService: AIService,
-    private readonly prisma: PrismaService,
+    private readonly databaseService: DatabaseService,
   ) {}
 
   async processStudentRequest(message: string, codePermanent?: string): Promise<any> {
     try {
-      // Analyser l'intention avec l'IA
+      // Fix the typo: analyizeInscriptionRequest -> analyzeInscriptionRequest
       const intent = await this.aiService.analyzeInscriptionRequest(message);
 
       // Obtenir le contexte étudiant si disponible
@@ -45,8 +45,8 @@ export class InscriptionAgentService {
 
   private async getStudentContext(codePermanent: string): Promise<any> {
     try {
-      // Get student info
-      const etudiant = await this.prisma.etudiants.findUnique({
+      // Use Prisma method to get student
+      const etudiant = await this.databaseService.etudiants.findUnique({
         where: { code_permanant: codePermanent },
         include: {
           programmes: true,
@@ -58,7 +58,7 @@ export class InscriptionAgentService {
       }
 
       // Get current inscriptions
-      const inscriptions = await this.prisma.inscription.findMany({
+      const inscriptions = await this.databaseService.inscription.findMany({
         where: {
           code_permanant: codePermanent,
           statut_inscription: 'Inscrit'
@@ -97,9 +97,6 @@ export class InscriptionAgentService {
       case 'VOIR_COURS':
         return await this.handleViewCours(studentContext);
 
-      case 'DESINSCRIRE_COURS':
-        return await this.handleDesinscription(parametres, studentContext);
-
       case 'CHERCHER_COURS':
         return await this.handleSearchCours(parametres);
 
@@ -111,146 +108,19 @@ export class InscriptionAgentService {
     }
   }
 
-  private async handleInscription(params: any, studentContext: any): Promise<any> {
-    if (!studentContext?.etudiant) {
-      throw new Error('Étudiant non trouvé');
-    }
-
-    let coursToRegister = [];
-
-    if (params.sigles_cours && params.sigles_cours.length > 0) {
-      // Specific courses mentioned
-      coursToRegister = await this.prisma.cours.findMany({
-        where: {
-          sigle: { in: params.sigles_cours }
-        }
-      });
-    } else if (params.nombre_cours) {
-      // AI should suggest courses based on program
-      const availableCours = await this.getAvailableCoursForStudent(
-        studentContext.etudiant.code_programme,
-        studentContext.etudiant.code_permanant
-      );
-
-      coursToRegister = await this.aiSelectCours(availableCours, studentContext, params.nombre_cours);
-    }
-
-    // Perform registrations
-    const results = [];
-    const currentYear = new Date().getFullYear();
-    const trimestre = params.trimestre || 'A2024';
-
-    for (const cours of coursToRegister) {
-      try {
-        // Check if plan de formation exists
-        const planExists = await this.prisma.plan_de_formation.findFirst({
-          where: {
-            code: studentContext.etudiant.code_programme,
-            sigle: cours.sigle
-          }
-        });
-
-        if (!planExists) {
-          results.push({
-            ...cours,
-            success: false,
-            error: 'Cours non disponible dans votre programme'
-          });
-          continue;
-        }
-
-        // Check if already registered
-        const existingInscription = await this.prisma.inscription.findFirst({
-          where: {
-            code_permanant: studentContext.etudiant.code_permanant,
-            sigle: cours.sigle,
-            trimestre_reel: trimestre,
-            annee: currentYear
-          }
-        });
-
-        if (existingInscription) {
-          results.push({
-            ...cours,
-            success: false,
-            error: 'Déjà inscrit à ce cours'
-          });
-          continue;
-        }
-
-        // Create inscription
-        await this.prisma.inscription.create({
-          data: {
-            code_permanant: studentContext.etudiant.code_permanant,
-            code_programme: studentContext.etudiant.code_programme,
-            trimestre: planExists.trimestre,
-            sigle: cours.sigle,
-            trimestre_reel: trimestre,
-            annee: currentYear,
-            statut_inscription: 'Inscrit'
-          }
-        });
-
-        results.push({ ...cours, success: true });
-      } catch (error) {
-        results.push({ ...cours, success: false, error: error.message });
-      }
-    }
-
-    return { inscriptions: results, studentContext };
-  }
-
-  private async getAvailableCoursForStudent(codeProgramme: string, codePermanent: string): Promise<any[]> {
-    // Get courses in the student's program that they're not already registered for
-    return await this.prisma.cours.findMany({
-      where: {
-        plan_de_formation: {
-          some: {
-            code: codeProgramme
-          }
-        },
-        NOT: {
-          plan_de_formation: {
-            some: {
-              inscription: {
-                some: {
-                  code_permanant: codePermanent,
-                  statut_inscription: 'Inscrit'
-                }
-              }
-            }
-          }
-        }
-      }
-    });
-  }
-
-  private async aiSelectCours(availableCours: any[], studentContext: any, count: number): Promise<any[]> {
-    // For now, just return the first few courses
-    // You can enhance this with AI logic later
-    return availableCours.slice(0, count);
-  }
-
-  private async handleViewCours(studentContext: any): Promise<any> {
-    return {
-      inscriptions_actuelles: studentContext?.inscriptions_actuelles || [],
-      total_credits: studentContext?.total_credits || 0,
-      etudiant: studentContext?.etudiant
-    };
-  }
-
   private async handleSearchCours(params: any): Promise<any> {
-    const searchTerm = params.criteres_recherche || '';
-
     try {
-      const courses = await this.prisma.cours.findMany({
+      const searchTerm = params.criteres_recherche || '';
+
+      // Use Prisma to search courses (SQL Server doesn't support case insensitive mode)
+      const courses = await this.databaseService.cours.findMany({
         where: {
           OR: [
-            { titre: { contains: searchTerm, mode: 'insensitive' } },
-            { d_partement: { contains: searchTerm, mode: 'insensitive' } },
+            { titre: { contains: searchTerm } },
+            { d_partement: { contains: searchTerm } },
             { sigle: { startsWith: this.mapSearchTermToCode(searchTerm) } },
-            { contenu: { contains: searchTerm, mode: 'insensitive' } },
-            { objectifs: { contains: searchTerm, mode: 'insensitive' } }
+            { contenu: { contains: searchTerm } },
+            { objectifs: { contains: searchTerm } }
           ]
         },
         orderBy: [
@@ -265,7 +135,6 @@ export class InscriptionAgentService {
       return [];
     }
   }
-
   private mapSearchTermToCode(searchTerm: string): string {
     const termLower = searchTerm.toLowerCase();
 
@@ -273,37 +142,64 @@ export class InscriptionAgentService {
       'informatique': 'INF',
       'computer science': 'INF',
       'programmation': 'INF',
-      'programming': 'INF',
       'mathématiques': 'MTH',
-      'mathematics': 'MTH',
       'math': 'MTH',
       'physique': 'PHY',
-      'physics': 'PHY',
       'chimie': 'CHM',
-      'chemistry': 'CHM',
       'français': 'FRA',
-      'french': 'FRA',
-      'anglais': 'ANG',
-      'english': 'ANG',
-      'histoire': 'HIS',
-      'history': 'HIS',
-      'économie': 'ECO',
-      'economics': 'ECO',
-      'gestion': 'ADM',
-      'administration': 'ADM',
-      'management': 'ADM'
+      'anglais': 'ANG'
     };
 
     return mappings[termLower] || termLower.toUpperCase().substring(0, 3);
   }
 
-  private async handleStudentInfo(studentContext: any): Promise<any> {
-    return studentContext;
+  private async handleViewCours(studentContext: any): Promise<any> {
+    return {
+      inscriptions_actuelles: studentContext?.inscriptions_actuelles || [],
+      total_credits: studentContext?.total_credits || 0,
+      etudiant: studentContext?.etudiant
+    };
   }
 
-  private async handleDesinscription(params: any, studentContext: any): Promise<any> {
-    // Implementation for dropping courses
-    return { message: 'Fonctionnalité de désinscription à implémenter' };
+  private async handleInscription(params: any, studentContext: any): Promise<any> {
+    if (!studentContext?.etudiant) {
+      throw new Error('Étudiant non trouvé');
+    }
+
+    let coursToRegister = [];
+
+    if (params.sigles_cours && params.sigles_cours.length > 0) {
+      // Specific courses mentioned
+      coursToRegister = await this.databaseService.cours.findMany({
+        where: {
+          sigle: { in: params.sigles_cours }
+        }
+      });
+    } else if (params.nombre_cours) {
+      // Get available courses for the student's program
+      const availableCours = await this.databaseService.cours.findMany({
+        where: {
+          plan_de_formation: {
+            some: {
+              code: studentContext.etudiant.code_programme
+            }
+          }
+        },
+        take: params.nombre_cours
+      });
+
+      coursToRegister = availableCours;
+    }
+
+    // For now, just return the courses that would be registered
+    return {
+      message: 'Inscription simulation - not yet implemented',
+      courses_to_register: coursToRegister
+    };
+  }
+
+  private async handleStudentInfo(studentContext: any): Promise<any> {
+    return studentContext;
   }
 
   private async generateContextualResponse(intent: any, results: any, studentContext?: any): Promise<string> {
@@ -313,14 +209,14 @@ export class InscriptionAgentService {
       case 'VOIR_COURS':
         return this.formatCoursListResponse(results, studentContext);
 
-      case 'INSCRIRE_COURS':
-        return this.formatInscriptionResponse(results);
-
       case 'CHERCHER_COURS':
         return this.formatSearchResponse(results);
 
       case 'INFO_ETUDIANT':
         return this.formatStudentInfoResponse(studentContext);
+
+      case 'INSCRIRE_COURS':
+        return this.formatInscriptionResponse(results);
 
       default:
         return "Demande traitée.";
@@ -338,29 +234,6 @@ export class InscriptionAgentService {
     }).join('\n• ');
 
     return `Cours actuels:\n• ${coursList}\n\nTotal: ${studentContext.total_credits} crédits`;
-  }
-
-  private formatInscriptionResponse(results: any): string {
-    if (!results.inscriptions || results.inscriptions.length === 0) {
-      return "Aucune inscription effectuée.";
-    }
-
-    const successful = results.inscriptions.filter((r: any) => r.success);
-    const failed = results.inscriptions.filter((r: any) => !r.success);
-
-    let response = '';
-
-    if (successful.length > 0) {
-      const successList = successful.map((r: any) => `${r.titre} (${r.sigle})`).join(', ');
-      response += `✅ Inscrit avec succès: ${successList}`;
-    }
-
-    if (failed.length > 0) {
-      const failList = failed.map((r: any) => `${r.titre || r.sigle}: ${r.error}`).join('\n• ');
-      response += `\n\n❌ Échecs:\n• ${failList}`;
-    }
-
-    return response;
   }
 
   private formatSearchResponse(results: any): string {
@@ -382,6 +255,18 @@ export class InscriptionAgentService {
     ).join('\n• ');
 
     return `${results.length} cours trouvé${results.length > 1 ? 's' : ''}:\n\n• ${courseList}`;
+  }
+
+  private formatInscriptionResponse(results: any): string {
+    if (results.courses_to_register && results.courses_to_register.length > 0) {
+      const courseList = results.courses_to_register.map((c: any) =>
+        `${c.sigle} - ${c.titre}`
+      ).join('\n• ');
+
+      return `Cours trouvés pour inscription:\n• ${courseList}\n\n${results.message}`;
+    }
+
+    return results.message || "Aucun cours trouvé pour inscription.";
   }
 
   private formatStudentInfoResponse(studentContext: any): string {
