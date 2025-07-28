@@ -74,18 +74,27 @@ Réponds en JSON avec cette structure:
   }
 
   async generateFriendlyResponse(intent: any, results: any, studentContext?: any): Promise<string> {
-    const prompt = `Génère une réponse amicale et naturelle en français pour l'étudiant.
+    const prompt = `Tu es un assistant d'inscription universitaire. Réponds de manière CONCISE et DIRECTE en français.
 
-Intention analysée: ${JSON.stringify(intent, null, 2)}
-Résultats de l'opération: ${JSON.stringify(results, null, 2)}
-${studentContext ? `Contexte étudiant: ${JSON.stringify(studentContext, null, 2)}` : ''}
+Intention: ${JSON.stringify(intent, null, 2)}
+Résultats: ${JSON.stringify(results, null, 2)}
+${studentContext ? `Contexte: ${JSON.stringify(studentContext, null, 2)}` : ''}
 
-Crée une réponse qui:
-- Confirme ce qui a été fait
-- Mentionne les détails spécifiques (noms de cours, crédits, etc.)
-- Est encourageante et professionnelle
-- Inclut des conseils ou prochaines étapes si pertinent
-- Sonne comme un conseiller pédagogique serviable`;
+RÈGLES IMPORTANTES:
+- Sois bref et direct
+- Pas de salutations longues
+- Pas de remerciements
+- Pas de signature
+- Va directement au point
+- Maximum 2-3 phrases
+- Utilise des puces pour les listes
+
+Exemples de bonnes réponses:
+- "Vous êtes inscrit à 3 cours: MTH1007 (3 crédits), INF1120 (3 crédits), FRA1002 (2 crédits). Total: 8 crédits."
+- "Inscription réussie pour: Calcul I (MTH1007). Vous avez maintenant 4 cours ce trimestre."
+- "Aucun cours trouvé. Veuillez vérifier votre code permanent."
+
+Réponds maintenant:`;
 
     try {
       const response = await axios.post(`${this.config.baseUrl}/api/generate`, {
@@ -93,15 +102,15 @@ Crée une réponse qui:
         prompt: prompt,
         stream: false,
         options: {
-          temperature: 0.7,
-          num_predict: 1000
+          temperature: 0.3, // Lower temperature for more consistent responses
+          num_predict: 200,  // Limit response length
+          stop: ['\n\n', 'Cordialement', 'Merci', 'Bonjour'] // Stop on these words
         }
       });
 
       return response.data.response.trim();
     } catch (error) {
-      this.logger.error('Error generating friendly response:', error);
-      return "Votre demande a été traitée avec succès!";
+      return "Opération terminée.";
     }
   }
 
