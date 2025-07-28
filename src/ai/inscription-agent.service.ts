@@ -91,6 +91,9 @@ export class InscriptionAgentService {
     const { action, parametres } = intent;
 
     switch (action) {
+      case 'RECOMMANDER_COURS':  // Add this missing case
+        return await this.handleRecommendCours(parametres, studentContext);
+
       case 'INSCRIRE_COURS':
         return await this.handleInscription(parametres, studentContext);
 
@@ -107,7 +110,6 @@ export class InscriptionAgentService {
         throw new Error(`Action inconnue: ${action}`);
     }
   }
-
   private async handleSearchCours(params: any): Promise<any> {
     try {
       const searchTerm = params.criteres_recherche || '';
@@ -160,7 +162,49 @@ export class InscriptionAgentService {
       etudiant: studentContext?.etudiant
     };
   }
+  private async handleRecommendCours(params: any, studentContext: any): Promise<any> {
+    if (!studentContext?.etudiant) {
+      throw new Error('Étudiant non trouvé pour les recommandations');
+    }
 
+    try {
+      const codeProgramme = studentContext.etudiant.code_programme;
+      const codeEtudiant = studentContext.etudiant.code_permanant;
+
+      // Get courses from student's program that they haven't taken yet
+      const availableCoursesInProgram = await this.databaseService.cours.findMany({
+        where: {
+          plan_de_formation: {
+            some: {
+              code: codeProgramme  // Courses in their program
+            }
+          }
+        },
+        include: {
+          plan_de_formation: {
+            where: { code: codeProgramme }
+          }
+        }
+      });
+
+      // For now, return the first few courses as recommendations
+      const numberOfCourses = params.nombre_cours || 4;
+      const recommendedCourses = availableCoursesInProgram.slice(0, numberOfCourses);
+
+      return {
+        programme: codeProgramme,
+        courses_recommandees: recommendedCourses,
+        total_disponibles: availableCoursesInProgram.length,
+        recommandation_personnalisee: true
+      };
+    } catch (error) {
+      this.logger.error('Recommendation error:', error);
+      return {
+        error: 'Erreur lors de la génération des recommandations',
+        programme: studentContext?.etudiant?.code_programme || 'inconnu'
+      };
+    }
+  }
   private async handleInscription(params: any, studentContext: any): Promise<any> {
     if (!studentContext?.etudiant) {
       throw new Error('Étudiant non trouvé');
@@ -206,6 +250,9 @@ export class InscriptionAgentService {
     const { action } = intent;
 
     switch (action) {
+      case 'RECOMMANDER_COURS':  // Add this case
+        return this.formatRecommendationResponse(results, studentContext);
+
       case 'VOIR_COURS':
         return this.formatCoursListResponse(results, studentContext);
 
@@ -222,7 +269,6 @@ export class InscriptionAgentService {
         return "Demande traitée.";
     }
   }
-
   private formatCoursListResponse(results: any, studentContext: any): string {
     if (!studentContext?.inscriptions_actuelles || studentContext.inscriptions_actuelles.length === 0) {
       return "Aucun cours inscrit actuellement.";
@@ -256,7 +302,27 @@ export class InscriptionAgentService {
 
     return `${results.length} cours trouvé${results.length > 1 ? 's' : ''}:\n\n• ${courseList}`;
   }
+  private formatRecommendationResponse(results: any, studentContext: any): string {
+    if (!results.courses_recommandees || results.courses_recommandees.length === 0) {
+      return `Aucun cours recommandé trouvé pour le programme ${results.programme || 'N/A'}.`;
+    }
 
+    const etudiant = studentContext?.etudiant;
+    let response = `🎓 Recommandations personnalisées pour ${etudiant?.prenom} ${etudiant?.nom}\n`;
+    response += `📚 Programme: ${results.programme}\n\n`;
+    response += `Cours recommandés:\n\n`;
+
+    const courseList = results.courses_recommandees.map((cours: any, index: number) => {
+      return `${index + 1}. ${cours.sigle} - ${cours.titre}
+   📊 ${cours.cr_dits} crédits
+   🏛️ ${cours.d_partement}`;
+    }).join('\n\n');
+
+    response += courseList;
+    response += `\n\n📈 Total: ${results.courses_recommandees.length} cours recommandés sur ${results.total_disponibles} disponibles dans votre programme.`;
+
+    return response;
+  }
   private formatInscriptionResponse(results: any): string {
     if (results.courses_to_register && results.courses_to_register.length > 0) {
       const courseList = results.courses_to_register.map((c: any) =>

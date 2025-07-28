@@ -23,35 +23,56 @@ export class AIService {
   }
 
   async analyzeInscriptionRequest(message: string, context?: any): Promise<any> {
-    const prompt = `Tu es un assistant d'inscription académique pour une université. Analyse cette demande d'étudiant et détermine l'action à effectuer.
+    const prompt = `Tu es un expert en analyse d'intentions pour un système d'inscription académique. Ton travail est de distinguer précisément entre les différentes actions.
 
-Actions disponibles:
-- INSCRIRE_COURS: L'étudiant veut s'inscrire à des cours
-- VOIR_COURS: L'étudiant veut voir ses cours actuels
-- DESINSCRIRE_COURS: L'étudiant veut se désinscrire de cours
-- CHERCHER_COURS: L'étudiant veut chercher des cours disponibles
-- INFO_ETUDIANT: L'étudiant veut voir ses informations
+CONTEXTE ÉTUDIANT: ${context ? JSON.stringify(context, null, 2) : 'Code permanent fourni - étudiant identifié'}
 
-Message de l'étudiant: "${message}"
-${context ? `Contexte: ${JSON.stringify(context, null, 2)}` : ''}
+MESSAGE ÉTUDIANT: "${message}"
 
-Réponds en JSON avec cette structure:
+ACTIONS DISPONIBLES ET LEURS CRITÈRES PRÉCIS:
+
+🎯 RECOMMANDER_COURS - Recommandations personnalisées pour UN étudiant spécifique
+MOTS-CLÉS: "recommander", "recommande", "suggère", "suggérer", "conseille", "conseiller", "pour moi", "mon programme", "mes cours", "adapté à"
+CONTEXTE REQUIS: Code permanent fourni
+EXEMPLE: "Recommande-moi 3 cours", "Suggère des cours pour mon programme", "Quels cours devrais-je prendre?"
+
+🔍 CHERCHER_COURS - Recherche générale de cours (pas personnalisée)
+MOTS-CLÉS: "cherche", "chercher", "trouve", "trouver", "liste", "quels sont", "voir les cours", "cours disponibles"
+CONTEXTE: Peu importe si code permanent fourni ou pas
+EXEMPLE: "Je cherche des cours en informatique", "Quels sont les cours de math?", "Liste des cours disponibles"
+
+👀 VOIR_COURS - Voir LES cours actuels de l'étudiant
+MOTS-CLÉS: "mes cours actuels", "cours que je suis", "mes inscriptions", "où je suis inscrit"
+EXEMPLE: "Montre-moi mes cours actuels", "Dans quels cours suis-je inscrit?"
+
+ANALYSE DU MESSAGE ACTUEL:
+Le message "${message}" contient-il:
+- Le mot "recommander/recommande/suggère" → OUI/NON
+- Une demande personnalisée ("pour moi", "mon programme") → OUI/NON  
+- Un code permanent est-il fourni → OUI/NON
+- S'agit-il d'une recherche générale → OUI/NON
+
+RÈGLE ABSOLUE:
+- Si le message contient "recommand*", "suggèr*", "conseil*" + code permanent → RECOMMANDER_COURS
+- Si le message contient "cherch*", "trouv*", "liste*" → CHERCHER_COURS
+- Si le message parle de "mes cours actuels" → VOIR_COURS
+
+Réponds UNIQUEMENT en JSON valide:
 {
-  "action": "ACTION_NAME",
-  "confiance": 0.95,
+  "action": "RECOMMANDER_COURS",
+  "confiance": 0.98,
   "parametres": {
-    "code_permanant": "code si mentionné",
-    "nombre_cours": "nombre si spécifié",
-    "sigles_cours": ["liste des sigles si mentionnés"],
-    "trimestre": "trimestre si mentionné",
-    "criteres_recherche": "critères additionnels"
+    "code_permanant": "${context ? 'fourni' : null}",
+    "nombre_cours": 4,
+    "pour_programme": true,
+    "trimestre_actuel": true,
+    "personnalise": true
   },
-  "raisonnement": "pourquoi cette action a été choisie"
+  "raisonnement": "Le message contient 'recommander' et 'mon programme' avec un code permanent fourni = demande personnalisée"
 }`;
 
     return await this.generateStructuredResponse(prompt);
   }
-
   private async generateStructuredResponse(prompt: string): Promise<any> {
     try {
       const response = await axios.post(`${this.config.baseUrl}/api/generate`, {
