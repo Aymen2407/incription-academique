@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+model cours {
+  sigle             String              @id(map: "PK__cours__3C47D51C052688D3") @db.VarChar(20)
+  titre             String              @db.VarChar(255)
+  cycle             Int
+  cr_dits           Decimal             @map("crédits") @db.Decimal(3, 1)
+  pr_alables        String?             @map("préalables") @db.Text
+  d_partement       String              @map("département") @db.VarChar(100)
+  objectifs         String?             @db.Text
+  contenu           String?             @db.Text
+  horaire_des_cours horaire_des_cours[]
+  plan_de_formation plan_de_formation[]
+}
+
+model etudiants {
+  code_permanant    String        @id(map: "PK__etudiant__1C024BC55987A8CB") @db.VarChar(20)
+  nom               String        @db.VarChar(255)
+  prenom            String        @db.VarChar(255)
+  adresse           String        @db.VarChar(500)
+  date_de_naissance DateTime      @db.Date
+  email             String?       @db.VarChar(320)
+  telephone         String?       @db.VarChar(20)
+  date_inscription  DateTime?     @default(now(), map: "DF__etudiants__date___37A5467C") @db.DateTime
+  statut            String?       @default("Actif", map: "DF__etudiants__statu__38996AB5") @db.VarChar(20)
+  code_programme    String        @db.VarChar(10)
+  programmes        programmes    @relation(fields: [code_programme], references: [code], onUpdate: NoAction, map: "FK_etudiant_programme")
+  inscription       inscription[]
+
+  @@index([code_programme], map: "idx_etudiant_programme")
+}
+
+model horaire_des_cours {
+  id                  Int     @id(map: "PK__horaire___3213E83FD57CC528") @default(autoincrement())
+  sigle               String  @db.VarChar(20)
+  trimestre           String  @db.VarChar(20)
+  mode_enseignement   String? @db.VarChar(50)
+  description_mode    String? @db.Text
+  enseignants         String? @db.Text
+  lieu                String? @db.VarChar(255)
+  programmes_reserves String? @db.Text
+  horaire             String? @db.NVarChar(Max)
+  cours               cours   @relation(fields: [sigle], references: [sigle], onDelete: Cascade, onUpdate: NoAction, map: "FK_horaire_cours_sigle")
+
+  @@unique([sigle, trimestre])
+  @@index([sigle], map: "idx_horaire_sigle")
+  @@index([sigle, trimestre], map: "idx_horaire_sigle_trimestre")
+  @@index([trimestre], map: "idx_horaire_trimestre")
+}
+
+model inscription {
+  id                 Int               @id(map: "PK__inscript__3213E83F29B71969") @default(autoincrement())
+  code_permanant     String            @db.VarChar(20)
+  code_programme     String            @db.VarChar(10)
+  trimestre          Int
+  sigle              String            @db.VarChar(20)
+  trimestre_reel     String            @db.VarChar(20)
+  annee              Int
+  date_inscription   DateTime?         @default(now(), map: "DF__inscripti__date___3B75D760") @db.DateTime
+  statut_inscription String?           @default("Inscrit", map: "DF__inscripti__statu__3C69FB99") @db.VarChar(20)
+  note_finale        Decimal?          @db.Decimal(5, 2)
+  note_lettre        String?           @db.VarChar(2)
+  etudiants          etudiants         @relation(fields: [code_permanant], references: [code_permanant], onDelete: Cascade, onUpdate: NoAction, map: "FK_inscription_etudiant")
+  plan_de_formation  plan_de_formation @relation(fields: [code_programme, trimestre, sigle], references: [code, trimestre, sigle], onDelete: Cascade, onUpdate: NoAction, map: "FK_inscription_plan_formation")
+
+  @@unique([code_permanant, sigle, trimestre_reel, annee], map: "UQ_inscription_etudiant_cours_trimestre")
+  @@index([code_permanant], map: "idx_inscription_etudiant")
+  @@index([code_permanant, trimestre_reel, annee], map: "idx_inscription_etudiant_trimestre")
+  @@index([code_programme, trimestre, sigle], map: "idx_inscription_plan_formation")
+  @@index([trimestre_reel, annee], map: "idx_inscription_trimestre_reel")
+}
+
+model plan_de_formation {
+  code        String        @db.VarChar(10)
+  trimestre   Int
+  sigle       String        @db.VarChar(20)
+  inscription inscription[]
+  programmes  programmes    @relation(fields: [code], references: [code], onUpdate: NoAction, map: "FK_plan_formation_code")
+  cours       cours         @relation(fields: [sigle], references: [sigle], onUpdate: NoAction, map: "FK_plan_formation_sigle")
+
+  @@unique([code, trimestre, sigle])
+}
+
+model programmes {
+  code              String              @id(map: "PK__programm__357D4CF89F5A2697") @db.VarChar(10)
+  libell_           String              @map("libellé") @db.VarChar(255)
+  lieu              String              @db.VarChar(255)
+  cycle             Int
+  etudiants         etudiants[]
+  plan_de_formation plan_de_formation[]
+}
