@@ -13,7 +13,6 @@ export class InscriptionAgentService {
 
   async processStudentRequest(message: string, codePermanent?: string): Promise<any> {
     try {
-      // Fix the typo: analyizeInscriptionRequest -> analyzeInscriptionRequest
       const intent = await this.aiService.analyzeInscriptionRequest(message);
 
       // Obtenir le contexte étudiant si disponible
@@ -91,7 +90,7 @@ export class InscriptionAgentService {
     const { action, parametres } = intent;
 
     switch (action) {
-      case 'RECOMMANDER_COURS':  // Add this missing case
+      case 'RECOMMANDER_COURS':
         return await this.handleRecommendCours(parametres, studentContext);
 
       case 'INSCRIRE_COURS':
@@ -110,32 +109,106 @@ export class InscriptionAgentService {
         throw new Error(`Action inconnue: ${action}`);
     }
   }
+
   private async handleSearchCours(params: any): Promise<any> {
     try {
       const searchTerm = params.criteres_recherche || '';
+      const trimestre = params.trimestre || null;
 
-      // Use Prisma to search courses (SQL Server doesn't support case insensitive mode)
-      const courses = await this.databaseService.cours.findMany({
-        where: {
-          OR: [
-            { titre: { contains: searchTerm } },
-            { d_partement: { contains: searchTerm } },
-            { sigle: { startsWith: this.mapSearchTermToCode(searchTerm) } },
-            { contenu: { contains: searchTerm } },
-            { objectifs: { contains: searchTerm } }
+      let courses;
+
+      if (trimestre) {
+        // Search courses offered in specific trimester
+        const horaireResults = await this.databaseService.horaire_des_cours.findMany({
+          where: {
+            trimestre: {
+              contains: this.mapTrimestreToCode(trimestre)
+            }
+          },
+          include: {
+            cours: true
+          }
+        });
+
+        // Filter by search term if provided
+        courses = horaireResults
+          .map(h => ({
+            ...h.cours,
+            horaire_info: {
+              trimestre: h.trimestre,
+              enseignants: h.enseignants,
+              lieu: h.lieu,
+              horaire: h.horaire,
+              mode_enseignement: h.mode_enseignement
+            }
+          }))
+          .filter(cours => {
+            if (!searchTerm) return true;
+            return (
+              cours.titre?.includes(searchTerm) ||
+              cours.d_partement?.includes(searchTerm) ||
+              cours.sigle?.includes(searchTerm) ||
+              cours.sigle?.startsWith(this.mapSearchTermToCode(searchTerm))
+            );
+          });
+      } else {
+        // Regular course search without trimester filter
+        courses = await this.databaseService.cours.findMany({
+          where: {
+            OR: [
+              { titre: { contains: searchTerm } },
+              { d_partement: { contains: searchTerm } },
+              { sigle: { startsWith: this.mapSearchTermToCode(searchTerm) } },
+              { contenu: { contains: searchTerm } },
+              { objectifs: { contains: searchTerm } }
+            ]
+          },
+          orderBy: [
+            { d_partement: 'asc' },
+            { sigle: 'asc' }
           ]
-        },
-        orderBy: [
-          { d_partement: 'asc' },
-          { sigle: 'asc' }
-        ]
-      });
+        });
+      }
 
       return courses;
     } catch (error) {
       this.logger.error('Search error:', error);
       return [];
     }
+  }
+
+  private mapTrimestreToCode(trimestre: string): string {
+    const trimLower = trimestre.toLowerCase();
+
+    // Extract year if mentioned
+    const yearMatch = trimestre.match(/20(\d{2})/);
+    const year = yearMatch ? yearMatch[0] : new Date().getFullYear().toString();
+
+    const mappings: { [key: string]: string } = {
+      'automne': `Automne ${year}`,
+      'hiver': `Hiver ${year}`,
+      'été': `Été ${year}`,
+      'ete': `Été ${year}`,
+      'summer': `Été ${year}`,
+      'fall': `Automne ${year}`,
+      'winter': `Hiver ${year}`,
+      'printemps': `Hiver ${year}`, // Assuming spring = winter semester
+      'spring': `Hiver ${year}`
+    };
+
+    // Check for direct matches
+    for (const [key, value] of Object.entries(mappings)) {
+      if (trimLower.includes(key)) {
+        return value;
+      }
+    }
+
+    // Check if it's already in the correct format
+    if (trimestre.match(/^(Automne|Hiver|Été) \d{4}$/)) {
+      return trimestre;
+    }
+
+    return trimestre; // Return as-is if no mapping found
   }
   private mapSearchTermToCode(searchTerm: string): string {
     const termLower = searchTerm.toLowerCase();
@@ -162,6 +235,7 @@ export class InscriptionAgentService {
       etudiant: studentContext?.etudiant
     };
   }
+
   private async handleRecommendCours(params: any, studentContext: any): Promise<any> {
     if (!studentContext?.etudiant) {
       throw new Error('Étudiant non trouvé pour les recommandations');
@@ -205,40 +279,185 @@ export class InscriptionAgentService {
       };
     }
   }
+
   private async handleInscription(params: any, studentContext: any): Promise<any> {
     if (!studentContext?.etudiant) {
       throw new Error('Étudiant non trouvé');
     }
 
-    let coursToRegister = [];
+    const etudiant = studentContext.etudiant;
+    const sigles = params.sigles_cours || [];
+    const trimestre = params.trimestre || params.trimestre_reel;
+    const annee = params.annee || new Date().getFullYear();
 
-    if (params.sigles_cours && params.sigles_cours.length > 0) {
-      // Specific courses mentioned
-      coursToRegister = await this.databaseService.cours.findMany({
-        where: {
-          sigle: { in: params.sigles_cours }
-        }
-      });
-    } else if (params.nombre_cours) {
-      // Get available courses for the student's program
-      const availableCours = await this.databaseService.cours.findMany({
-        where: {
-          plan_de_formation: {
-            some: {
-              code: studentContext.etudiant.code_programme
-            }
-          }
-        },
-        take: params.nombre_cours
-      });
-
-      coursToRegister = availableCours;
+    if (!sigles || sigles.length === 0) {
+      throw new Error('Aucun sigle de cours spécifié');
     }
 
-    // For now, just return the courses that would be registered
+    if (!trimestre) {
+      throw new Error('Trimestre non spécifié');
+    }
+
+    const results = [];
+
+    for (const sigle of sigles) {
+      try {
+        // Step 1: Validate course exists
+        const cours = await this.databaseService.cours.findUnique({
+          where: { sigle: sigle }
+        });
+
+        if (!cours) {
+          results.push({
+            sigle: sigle,
+            success: false,
+            error: 'Cours inexistant'
+          });
+          continue;
+        }
+
+        // Step 2: Validate course is in student's program
+        const courseInProgram = await this.databaseService.plan_de_formation.findFirst({
+          where: {
+            code: etudiant.code_programme,
+            sigle: sigle
+          }
+        });
+
+        if (!courseInProgram) {
+          results.push({
+            sigle: sigle,
+            titre: cours.titre,
+            success: false,
+            error: `Cours non disponible dans votre programme ${etudiant.code_programme}`
+          });
+          continue;
+        }
+
+        // Step 3: Validate course is offered in the specified trimester
+        const courseSchedule = await this.databaseService.horaire_des_cours.findFirst({
+          where: {
+            sigle: sigle,
+            trimestre: trimestre
+          }
+        });
+
+        if (!courseSchedule) {
+          results.push({
+            sigle: sigle,
+            titre: cours.titre,
+            success: false,
+            error: `Cours non offert au trimestre ${trimestre}`
+          });
+          continue;
+        }
+
+        // Step 4: Check if already registered
+        const existingInscription = await this.databaseService.inscription.findFirst({
+          where: {
+            code_permanant: etudiant.code_permanant,
+            sigle: sigle,
+            trimestre_reel: trimestre,
+            annee: annee
+          }
+        });
+
+        if (existingInscription) {
+          results.push({
+            sigle: sigle,
+            titre: cours.titre,
+            success: false,
+            error: 'Déjà inscrit à ce cours pour ce trimestre'
+          });
+          continue;
+        }
+
+        // Step 5: Validate prerequisites
+        const prerequisitesValid = await this.validatePrerequisites(etudiant.code_permanant, cours);
+
+        if (!prerequisitesValid.valid) {
+          results.push({
+            sigle: sigle,
+            titre: cours.titre,
+            success: false,
+            error: `Préalables non satisfaits: ${prerequisitesValid.missing.join(', ')}`
+          });
+          continue;
+        }
+
+        // Step 6: CREATE THE INSCRIPTION - This is the actual database insertion
+        const newInscription = await this.databaseService.inscription.create({
+          data: {
+            code_permanant: etudiant.code_permanant,
+            code_programme: etudiant.code_programme,
+            trimestre: courseInProgram.trimestre,
+            sigle: sigle,
+            trimestre_reel: trimestre,
+            annee: annee,
+            statut_inscription: 'Inscrit'
+          }
+        });
+
+        results.push({
+          sigle: sigle,
+          titre: cours.titre,
+          credits: cours.cr_dits,
+          trimestre: trimestre,
+          success: true,
+          inscription_id: newInscription.id,
+          message: 'Inscription réussie'
+        });
+
+      } catch (error) {
+        results.push({
+          sigle: sigle,
+          success: false,
+          error: `Erreur d'inscription: ${error.message}`
+        });
+      }
+    }
+
     return {
-      message: 'Inscription simulation - not yet implemented',
-      courses_to_register: coursToRegister
+      etudiant: etudiant,
+      trimestre: trimestre,
+      inscriptions: results,
+      inscriptions_reussies: results.filter(r => r.success).length,
+      inscriptions_echouees: results.filter(r => !r.success).length
+    };
+  }
+
+  private async validatePrerequisites(codePermanent: string, cours: any): Promise<{valid: boolean, missing: string[]}> {
+    if (!cours.pr_alables) {
+      return { valid: true, missing: [] };
+    }
+
+    // Parse prerequisites from the course (this depends on how they're stored)
+    // Assuming prerequisites are stored as comma-separated sigles
+    const requiredCourses = cours.pr_alables
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.match(/[A-Z]{3}\d{4}/));
+
+    if (requiredCourses.length === 0) {
+      return { valid: true, missing: [] };
+    }
+
+    // Check which prerequisites the student has completed
+    const completedCourses = await this.databaseService.inscription.findMany({
+      where: {
+        code_permanant: codePermanent,
+        sigle: { in: requiredCourses },
+        statut_inscription: 'Inscrit',
+        note_finale: { gte: 50 } // Assuming 50+ is passing grade
+      }
+    });
+
+    const completedSigles = completedCourses.map(c => c.sigle);
+    const missingSigles = requiredCourses.filter(req => !completedSigles.includes(req));
+
+    return {
+      valid: missingSigles.length === 0,
+      missing: missingSigles
     };
   }
 
@@ -250,7 +469,7 @@ export class InscriptionAgentService {
     const { action } = intent;
 
     switch (action) {
-      case 'RECOMMANDER_COURS':  // Add this case
+      case 'RECOMMANDER_COURS':
         return this.formatRecommendationResponse(results, studentContext);
 
       case 'VOIR_COURS':
@@ -269,6 +488,7 @@ export class InscriptionAgentService {
         return "Demande traitée.";
     }
   }
+
   private formatCoursListResponse(results: any, studentContext: any): string {
     if (!studentContext?.inscriptions_actuelles || studentContext.inscriptions_actuelles.length === 0) {
       return "Aucun cours inscrit actuellement.";
@@ -287,21 +507,38 @@ export class InscriptionAgentService {
       return "Aucun cours trouvé pour ce critère de recherche.";
     }
 
+    // Check if results include trimester info
+    const hasTrimestreInfo = results.some((c: any) => c.horaire_info);
+
     if (results.length > 10) {
       const first10 = results.slice(0, 10);
-      const courseList = first10.map((c: any) =>
-        `${c.sigle} - ${c.titre} (${c.cr_dits} crédits) - ${c.d_partement}`
-      ).join('\n• ');
+      const courseList = first10.map((c: any) => {
+        if (hasTrimestreInfo && c.horaire_info) {
+          return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits)
+   📅 ${c.horaire_info.trimestre} | 👨‍🏫 ${c.horaire_info.enseignants || 'N/A'}
+   📍 ${c.horaire_info.lieu || 'N/A'} | 🏛️ ${c.d_partement}`;
+        } else {
+          return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits) - ${c.d_partement}`;
+        }
+      }).join('\n\n');
 
-      return `${results.length} cours trouvés. Voici les 10 premiers:\n\n• ${courseList}\n\n... et ${results.length - 10} autres cours.`;
+      return `${results.length} cours trouvés. Voici les 10 premiers:\n\n${courseList}\n\n... et ${results.length - 10} autres cours.`;
     }
 
-    const courseList = results.map((c: any) =>
-      `${c.sigle} - ${c.titre} (${c.cr_dits} crédits) - ${c.d_partement}`
-    ).join('\n• ');
+    const courseList = results.map((c: any) => {
+      if (hasTrimestreInfo && c.horaire_info) {
+        return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits)
+   📅 ${c.horaire_info.trimestre} | 👨‍🏫 ${c.horaire_info.enseignants || 'N/A'}
+   📍 ${c.horaire_info.lieu || 'N/A'} | 🏛️ ${c.d_partement}`;
+      } else {
+        return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits) - ${c.d_partement}`;
+      }
+    }).join('\n\n');
 
-    return `${results.length} cours trouvé${results.length > 1 ? 's' : ''}:\n\n• ${courseList}`;
+    const trimestreInfo = hasTrimestreInfo ? ' avec horaires' : '';
+    return `${results.length} cours trouvé${results.length > 1 ? 's' : ''}${trimestreInfo}:\n\n${courseList}`;
   }
+
   private formatRecommendationResponse(results: any, studentContext: any): string {
     if (!results.courses_recommandees || results.courses_recommandees.length === 0) {
       return `Aucun cours recommandé trouvé pour le programme ${results.programme || 'N/A'}.`;
@@ -323,16 +560,38 @@ export class InscriptionAgentService {
 
     return response;
   }
-  private formatInscriptionResponse(results: any): string {
-    if (results.courses_to_register && results.courses_to_register.length > 0) {
-      const courseList = results.courses_to_register.map((c: any) =>
-        `${c.sigle} - ${c.titre}`
-      ).join('\n• ');
 
-      return `Cours trouvés pour inscription:\n• ${courseList}\n\n${results.message}`;
+  private formatInscriptionResponse(results: any): string {
+    if (!results.inscriptions || results.inscriptions.length === 0) {
+      return "Aucune tentative d'inscription effectuée.";
     }
 
-    return results.message || "Aucun cours trouvé pour inscription.";
+    const etudiant = results.etudiant;
+    let response = `📚 Résultats d'inscription pour ${etudiant.prenom} ${etudiant.nom}\n`;
+    response += `🎓 Programme: ${etudiant.code_programme} | 📅 Trimestre: ${results.trimestre}\n\n`;
+
+    const successful = results.inscriptions.filter((r: any) => r.success);
+    const failed = results.inscriptions.filter((r: any) => !r.success);
+
+    if (successful.length > 0) {
+      response += `✅ INSCRIPTIONS RÉUSSIES (${successful.length}):\n`;
+      successful.forEach((r: any) => {
+        response += `• ${r.sigle} - ${r.titre} (${r.credits} crédits)\n`;
+        response += `  📝 ID: ${r.inscription_id}\n`;
+      });
+    }
+
+    if (failed.length > 0) {
+      response += `\n❌ INSCRIPTIONS ÉCHOUÉES (${failed.length}):\n`;
+      failed.forEach((r: any) => {
+        response += `• ${r.sigle}${r.titre ? ` - ${r.titre}` : ''}\n`;
+        response += `  ⚠️ Raison: ${r.error}\n`;
+      });
+    }
+
+    response += `\n📊 Résumé: ${results.inscriptions_reussies}/${results.inscriptions.length} inscriptions réussies`;
+
+    return response;
   }
 
   private formatStudentInfoResponse(studentContext: any): string {

@@ -7,7 +7,7 @@ export class HoraireDesCoursController {
   constructor(private readonly horaireDesCoursService: HoraireDesCoursService) {}
 
   @Get()
-  async getCourses(@Query("id") id ?: string) {
+  async getCourses(@Query("sigle") id ?: string) {
     if (id) {
       return await this.horaireDesCoursService.getHoraireById(id);
     } else {

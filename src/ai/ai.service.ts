@@ -16,63 +16,90 @@ export class AIService {
   constructor() {
     this.config = {
       baseUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
-      model: process.env.AI_MODEL || 'llama3.2:3b',
+      model: process.env.AI_MODEL || 'mistral-nemo:12b',
       temperature: parseFloat(process.env.AI_TEMPERATURE || '0.1'),
       maxTokens: parseInt(process.env.AI_MAX_TOKENS || '2000'),
     };
   }
 
   async analyzeInscriptionRequest(message: string, context?: any): Promise<any> {
-    const prompt = `Tu es un expert en analyse d'intentions pour un système d'inscription académique. Ton travail est de distinguer précisément entre les différentes actions.
+    const prompt = `Tu es un expert en analyse d'intentions pour un système d'inscription académique.
 
-CONTEXTE ÉTUDIANT: ${context ? JSON.stringify(context, null, 2) : 'Code permanent fourni - étudiant identifié'}
+CONTEXTE ÉTUDIANT: ${context ? JSON.stringify(context, null, 2) : 'Code permanent fourni'}
 
 MESSAGE ÉTUDIANT: "${message}"
 
-ACTIONS DISPONIBLES ET LEURS CRITÈRES PRÉCIS:
+ACTIONS DISPONIBLES:
 
-🎯 RECOMMANDER_COURS - Recommandations personnalisées pour UN étudiant spécifique
-MOTS-CLÉS: "recommander", "recommande", "suggère", "suggérer", "conseille", "conseiller", "pour moi", "mon programme", "mes cours", "adapté à"
-CONTEXTE REQUIS: Code permanent fourni
-EXEMPLE: "Recommande-moi 3 cours", "Suggère des cours pour mon programme", "Quels cours devrais-je prendre?"
+🎯 INSCRIRE_COURS - Inscription à des cours spécifiques
+MOTS-CLÉS: "inscris", "inscrire", "inscription", "je veux m'inscrire", "enregistre-moi"
+PARAMÈTRES REQUIS: sigles de cours, trimestre
+EXEMPLE: "inscris-moi au cours INF1062", "je veux m'inscrire à MTH1007 pour l'automne 2025"
 
-🔍 CHERCHER_COURS - Recherche générale de cours (pas personnalisée)
-MOTS-CLÉS: "cherche", "chercher", "trouve", "trouver", "liste", "quels sont", "voir les cours", "cours disponibles"
-CONTEXTE: Peu importe si code permanent fourni ou pas
-EXEMPLE: "Je cherche des cours en informatique", "Quels sont les cours de math?", "Liste des cours disponibles"
+🎯 RECOMMANDER_COURS - Recommandations personnalisées
+MOTS-CLÉS: "recommander", "suggère", "conseille"
 
-👀 VOIR_COURS - Voir LES cours actuels de l'étudiant
-MOTS-CLÉS: "mes cours actuels", "cours que je suis", "mes inscriptions", "où je suis inscrit"
-EXEMPLE: "Montre-moi mes cours actuels", "Dans quels cours suis-je inscrit?"
+🔍 CHERCHER_COURS - Recherche de cours
+MOTS-CLÉS: "cherche", "liste", "cours disponibles"
 
-ANALYSE DU MESSAGE ACTUEL:
+👀 VOIR_COURS - Cours actuels de l'étudiant
+MOTS-CLÉS: "mes cours actuels"
+
+ANALYSE SPÉCIALE POUR INSCRIPTIONS:
 Le message "${message}" contient-il:
-- Le mot "recommander/recommande/suggère" → OUI/NON
-- Une demande personnalisée ("pour moi", "mon programme") → OUI/NON  
-- Un code permanent est-il fourni → OUI/NON
-- S'agit-il d'une recherche générale → OUI/NON
+- Verbe d'inscription: "inscri", "inscrire", "inscription" → OUI/NON
+- Sigles de cours: recherche des codes comme INF1062, MTH1007, etc.
+- Trimestre: automne, hiver, été + année
 
-RÈGLE ABSOLUE:
-- Si le message contient "recommand*", "suggèr*", "conseil*" + code permanent → RECOMMANDER_COURS
-- Si le message contient "cherch*", "trouv*", "liste*" → CHERCHER_COURS
-- Si le message parle de "mes cours actuels" → VOIR_COURS
+EXTRACTION AUTOMATIQUE:
+- Sigles détectés: ${this.extractCourseSigles(message)}
+- Trimestre détecté: ${this.extractTrimestre(message)}
+- Action: ${message.toLowerCase().includes('inscri') ? 'INSCRIRE_COURS' : 'AUTRE'}
+
+IMPORTANT: Les trimestres dans la base de données sont stockés comme:
+- "Automne 2025" (pas A2025)
+- "Hiver 2026" (pas H2026)  
+- "Été 2025" (pas E2025)
 
 Réponds UNIQUEMENT en JSON valide:
 {
-  "action": "RECOMMANDER_COURS",
+  "action": "INSCRIRE_COURS",
   "confiance": 0.98,
   "parametres": {
-    "code_permanant": "${context ? 'fourni' : null}",
-    "nombre_cours": 4,
-    "pour_programme": true,
-    "trimestre_actuel": true,
-    "personnalise": true
+    "sigles_cours": ["INF1563"],
+    "trimestre": "Automne 2025",
+    "trimestre_reel": "Automne 2025",
+    "annee": 2025,
+    "validation_requise": true
   },
-  "raisonnement": "Le message contient 'recommander' et 'mon programme' avec un code permanent fourni = demande personnalisée"
+  "raisonnement": "Demande explicite d'inscription avec sigles et trimestre spécifiés"
 }`;
 
     return await this.generateStructuredResponse(prompt);
   }
+
+  private extractCourseSigles(message: string): string[] {
+    // Match course codes like INF1062, MTH1007, etc.
+    const sigles = message.match(/[A-Z]{3}\d{4}/gi) || [];
+    return sigles.map(s => s.toUpperCase());
+  }
+
+  private extractTrimestre(message: string): string | null {
+    const trimLower = message.toLowerCase();
+    const currentYear = new Date().getFullYear();
+
+    // Look for year first
+    const yearMatch = message.match(/20(\d{2})/);
+    const year = yearMatch ? yearMatch[0] : currentYear.toString();
+
+    // Return full format as stored in database
+    if (trimLower.includes('automne')) return `Automne ${year}`;
+    if (trimLower.includes('hiver')) return `Hiver ${year}`;
+    if (trimLower.includes('été') || trimLower.includes('ete')) return `Été ${year}`;
+
+    return null;
+  }
+
   private async generateStructuredResponse(prompt: string): Promise<any> {
     try {
       const response = await axios.post(`${this.config.baseUrl}/api/generate`, {

@@ -7,22 +7,29 @@ export class HoraireDesCoursService {
   constructor(private readonly databaseService: DatabaseService) {
   }
 
-
   async getHoraireById(id): Promise<horaire_des_cours | {}> {
     try {
-
-      if (!id || !id.trim()) {
+      // Check if Sigle parameter is provided and valid
+      if (!id || typeof id !== 'string' || !id.trim()) {
         return {};
       }
 
-      const numId = parseInt(id.trim());
+      const sigle = id.trim();
 
-      if (isNaN(numId) || numId <= 0) {
+      // Validate Sigle length (varchar 20)
+      if (sigle.length > 20) {
         return {};
       }
+
+      // Optional: Add basic format validation for Sigle if needed
+      // Example: if Sigle should contain only alphanumeric characters and hyphens
+      // const siglePattern = /^[A-Za-z0-9-]+$/;
+      // if (!siglePattern.test(sigle)) {
+      //   return {};
+      // }
 
       const result = await this.databaseService.$queryRaw<horaire_des_cours[]>`
-            EXEC GetHoraireById @id = ${id}
+            EXEC GetHoraireById @id = ${sigle}
         `;
       return result[0] || {};
     } catch (error) {
@@ -30,7 +37,6 @@ export class HoraireDesCoursService {
       throw error;
     }
   }
-
 
   async getAllHoraire() {
     return this.databaseService.$queryRaw<horaire_des_cours[]>`
