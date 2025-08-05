@@ -96,6 +96,9 @@ export class InscriptionAgentService {
       case 'INSCRIRE_COURS':
         return await this.handleInscription(parametres, studentContext);
 
+      case 'DESINSCRIRE_COURS':  // Add this new case
+        return await this.handleDesinscription(parametres, studentContext);
+
       case 'VOIR_COURS':
         return await this.handleViewCours(studentContext);
 
@@ -210,6 +213,7 @@ export class InscriptionAgentService {
 
     return trimestre; // Return as-is if no mapping found
   }
+
   private mapSearchTermToCode(searchTerm: string): string {
     const termLower = searchTerm.toLowerCase();
 
@@ -426,6 +430,142 @@ export class InscriptionAgentService {
     };
   }
 
+  private async handleDesinscription(params: any, studentContext: any): Promise<any> {
+    if (!studentContext?.etudiant) {
+      throw new Error('Étudiant non trouvé');
+    }
+
+    const etudiant = studentContext.etudiant;
+    const sigles = params.sigles_cours || [];
+    const trimestre = params.trimestre || params.trimestre_reel;
+    const annee = params.annee || new Date().getFullYear();
+
+    if (!sigles || sigles.length === 0) {
+      throw new Error('Aucun sigle de cours spécifié pour la désinscription');
+    }
+
+    const results = [];
+
+    for (const sigle of sigles) {
+      try {
+        // Step 1: Find existing inscription
+        const whereClause: any = {
+          code_permanant: etudiant.code_permanant,
+          sigle: sigle,
+          statut_inscription: 'Inscrit'
+        };
+
+        // Add trimester filter if specified
+        if (trimestre) {
+          whereClause.trimestre_reel = trimestre;
+          whereClause.annee = annee;
+        }
+
+        const existingInscriptions = await this.databaseService.inscription.findMany({
+          where: whereClause,
+          include: {
+            plan_de_formation: {
+              include: {
+                cours: true
+              }
+            }
+          }
+        });
+
+        if (!existingInscriptions || existingInscriptions.length === 0) {
+          results.push({
+            sigle: sigle,
+            success: false,
+            error: trimestre
+              ? `Aucune inscription trouvée pour ${sigle} au trimestre ${trimestre}`
+              : `Aucune inscription active trouvée pour ${sigle}`
+          });
+          continue;
+        }
+
+        // If multiple inscriptions found (shouldn't happen but just in case)
+        let inscriptionToRemove = existingInscriptions[0];
+
+        // If trimester specified, find the exact match
+        if (trimestre && existingInscriptions.length > 1) {
+          const exactMatch = existingInscriptions.find(i =>
+            i.trimestre_reel === trimestre && i.annee === annee
+          );
+          if (exactMatch) {
+            inscriptionToRemove = exactMatch;
+          }
+        }
+
+        // Step 2: Check withdrawal deadline (optional business rule)
+        const canWithdraw = await this.validateWithdrawalDeadline(inscriptionToRemove);
+
+        if (!canWithdraw.allowed) {
+          results.push({
+            sigle: sigle,
+            titre: inscriptionToRemove.plan_de_formation.cours.titre,
+            success: false,
+            error: canWithdraw.reason
+          });
+          continue;
+        }
+
+        // Step 3: DELETE THE INSCRIPTION - This removes it from the database
+        await this.databaseService.inscription.delete({
+          where: {
+            id: inscriptionToRemove.id
+          }
+        });
+
+        results.push({
+          sigle: sigle,
+          titre: inscriptionToRemove.plan_de_formation.cours.titre,
+          credits: inscriptionToRemove.plan_de_formation.cours.cr_dits,
+          trimestre: inscriptionToRemove.trimestre_reel,
+          success: true,
+          inscription_id: inscriptionToRemove.id,
+          message: 'Désinscription réussie'
+        });
+
+      } catch (error) {
+        results.push({
+          sigle: sigle,
+          success: false,
+          error: `Erreur de désinscription: ${error.message}`
+        });
+      }
+    }
+
+    return {
+      etudiant: etudiant,
+      trimestre: trimestre,
+      desinscriptions: results,
+      desinscriptions_reussies: results.filter(r => r.success).length,
+      desinscriptions_echouees: results.filter(r => !r.success).length
+    };
+  }
+
+  private async validateWithdrawalDeadline(inscription: any): Promise<{allowed: boolean, reason?: string}> {
+    // This is a placeholder for withdrawal deadline validation
+    // You can implement business rules here like:
+    // - No withdrawal after certain date
+    // - No withdrawal if course has started
+    // - Different rules for different course types
+
+    const now = new Date();
+    const inscriptionDate = new Date(inscription.date_inscription);
+    const daysSinceInscription = Math.floor((now.getTime() - inscriptionDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    // Example rule: Allow withdrawal within 30 days of inscription
+    if (daysSinceInscription > 30) {
+      return {
+        allowed: false,
+        reason: 'Délai de désinscription dépassé (plus de 30 jours)'
+      };
+    }
+
+    return { allowed: true };
+  }
+
   private async validatePrerequisites(codePermanent: string, cours: any): Promise<{valid: boolean, missing: string[]}> {
     if (!cours.pr_alables) {
       return { valid: true, missing: [] };
@@ -484,6 +624,9 @@ export class InscriptionAgentService {
       case 'INSCRIRE_COURS':
         return this.formatInscriptionResponse(results);
 
+      case 'DESINSCRIRE_COURS':  // Add this case
+        return this.formatDesinscriptionResponse(results);
+
       default:
         return "Demande traitée.";
     }
@@ -515,8 +658,8 @@ export class InscriptionAgentService {
       const courseList = first10.map((c: any) => {
         if (hasTrimestreInfo && c.horaire_info) {
           return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits)
-   📅 ${c.horaire_info.trimestre} | 👨‍🏫 ${c.horaire_info.enseignants || 'N/A'}
-   📍 ${c.horaire_info.lieu || 'N/A'} | 🏛️ ${c.d_partement}`;
+  📅 ${c.horaire_info.trimestre} | 👨‍🏫 ${c.horaire_info.enseignants || 'N/A'}
+  📍 ${c.horaire_info.lieu || 'N/A'} | 🏛️ ${c.d_partement}`;
         } else {
           return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits) - ${c.d_partement}`;
         }
@@ -528,8 +671,8 @@ export class InscriptionAgentService {
     const courseList = results.map((c: any) => {
       if (hasTrimestreInfo && c.horaire_info) {
         return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits)
-   📅 ${c.horaire_info.trimestre} | 👨‍🏫 ${c.horaire_info.enseignants || 'N/A'}
-   📍 ${c.horaire_info.lieu || 'N/A'} | 🏛️ ${c.d_partement}`;
+  📅 ${c.horaire_info.trimestre} | 👨‍🏫 ${c.horaire_info.enseignants || 'N/A'}
+  📍 ${c.horaire_info.lieu || 'N/A'} | 🏛️ ${c.d_partement}`;
       } else {
         return `${c.sigle} - ${c.titre} (${c.cr_dits} crédits) - ${c.d_partement}`;
       }
@@ -551,8 +694,8 @@ export class InscriptionAgentService {
 
     const courseList = results.courses_recommandees.map((cours: any, index: number) => {
       return `${index + 1}. ${cours.sigle} - ${cours.titre}
-   📊 ${cours.cr_dits} crédits
-   🏛️ ${cours.d_partement}`;
+  📊 ${cours.cr_dits} crédits
+  🏛️ ${cours.d_partement}`;
     }).join('\n\n');
 
     response += courseList;
@@ -590,6 +733,43 @@ export class InscriptionAgentService {
     }
 
     response += `\n📊 Résumé: ${results.inscriptions_reussies}/${results.inscriptions.length} inscriptions réussies`;
+
+    return response;
+  }
+
+  private formatDesinscriptionResponse(results: any): string {
+    if (!results.desinscriptions || results.desinscriptions.length === 0) {
+      return "Aucune tentative de désinscription effectuée.";
+    }
+
+    const etudiant = results.etudiant;
+    let response = `📚 Résultats de désinscription pour ${etudiant.prenom} ${etudiant.nom}\n`;
+    response += `🎓 Programme: ${etudiant.code_programme}`;
+    if (results.trimestre) {
+      response += ` | 📅 Trimestre: ${results.trimestre}`;
+    }
+    response += `\n\n`;
+
+    const successful = results.desinscriptions.filter((r: any) => r.success);
+    const failed = results.desinscriptions.filter((r: any) => !r.success);
+
+    if (successful.length > 0) {
+      response += `✅ DÉSINSCRIPTIONS RÉUSSIES (${successful.length}):\n`;
+      successful.forEach((r: any) => {
+        response += `• ${r.sigle} - ${r.titre} (${r.credits} crédits)\n`;
+        response += `  🗑️ Retiré de votre horaire\n`;
+      });
+    }
+
+    if (failed.length > 0) {
+      response += `\n❌ DÉSINSCRIPTIONS ÉCHOUÉES (${failed.length}):\n`;
+      failed.forEach((r: any) => {
+        response += `• ${r.sigle}${r.titre ? ` - ${r.titre}` : ''}\n`;
+        response += `  ⚠️ Raison: ${r.error}\n`;
+      });
+    }
+
+    response += `\n📊 Résumé: ${results.desinscriptions_reussies}/${results.desinscriptions.length} désinscriptions réussies`;
 
     return response;
   }

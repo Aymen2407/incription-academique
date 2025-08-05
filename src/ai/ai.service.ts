@@ -36,6 +36,11 @@ MOTS-CLÉS: "inscris", "inscrire", "inscription", "je veux m'inscrire", "enregis
 PARAMÈTRES REQUIS: sigles de cours, trimestre
 EXEMPLE: "inscris-moi au cours INF1062", "je veux m'inscrire à MTH1007 pour l'automne 2025"
 
+❌ DESINSCRIRE_COURS - Retrait/abandon de cours
+MOTS-CLÉS: "désinscrire", "desinscrire", "retirer", "abandonner", "enlever", "supprimer", "drop", "remove"
+PARAMÈTRES REQUIS: sigles de cours, trimestre (optionnel)
+EXEMPLE: "désinscrire-moi du cours INF1062", "je veux abandonner MTH1007", "retirer INF1563 de mon horaire"
+
 🎯 RECOMMANDER_COURS - Recommandations personnalisées
 MOTS-CLÉS: "recommander", "suggère", "conseille"
 
@@ -45,16 +50,17 @@ MOTS-CLÉS: "cherche", "liste", "cours disponibles"
 👀 VOIR_COURS - Cours actuels de l'étudiant
 MOTS-CLÉS: "mes cours actuels"
 
-ANALYSE SPÉCIALE POUR INSCRIPTIONS:
+ANALYSE SPÉCIALE POUR DÉSINSCRIPTIONS:
 Le message "${message}" contient-il:
-- Verbe d'inscription: "inscri", "inscrire", "inscription" → OUI/NON
+- Verbe de désinscription: "désinscrire", "retirer", "abandonner", "enlever", "supprimer" → OUI/NON
 - Sigles de cours: recherche des codes comme INF1062, MTH1007, etc.
-- Trimestre: automne, hiver, été + année
+- Trimestre: automne, hiver, été + année (optionnel pour désinscription)
 
 EXTRACTION AUTOMATIQUE:
 - Sigles détectés: ${this.extractCourseSigles(message)}
 - Trimestre détecté: ${this.extractTrimestre(message)}
-- Action: ${message.toLowerCase().includes('inscri') ? 'INSCRIRE_COURS' : 'AUTRE'}
+- Action désinscription: ${this.hasDesinscriptionKeywords(message) ? 'DESINSCRIRE_COURS' : 'AUTRE'}
+- Action inscription: ${message.toLowerCase().includes('inscri') ? 'INSCRIRE_COURS' : 'AUTRE'}
 
 IMPORTANT: Les trimestres dans la base de données sont stockés comme:
 - "Automne 2025" (pas A2025)
@@ -63,7 +69,7 @@ IMPORTANT: Les trimestres dans la base de données sont stockés comme:
 
 Réponds UNIQUEMENT en JSON valide:
 {
-  "action": "INSCRIRE_COURS",
+  "action": "DESINSCRIRE_COURS",
   "confiance": 0.98,
   "parametres": {
     "sigles_cours": ["INF1563"],
@@ -72,7 +78,7 @@ Réponds UNIQUEMENT en JSON valide:
     "annee": 2025,
     "validation_requise": true
   },
-  "raisonnement": "Demande explicite d'inscription avec sigles et trimestre spécifiés"
+  "raisonnement": "Demande explicite de désinscription avec sigle spécifié"
 }`;
 
     return await this.generateStructuredResponse(prompt);
@@ -98,6 +104,16 @@ Réponds UNIQUEMENT en JSON valide:
     if (trimLower.includes('été') || trimLower.includes('ete')) return `Été ${year}`;
 
     return null;
+  }
+
+  private hasDesinscriptionKeywords(message: string): boolean {
+    const desinscriptionWords = [
+      'désinscrire', 'desinscrire', 'retirer', 'abandonner',
+      'enlever', 'supprimer', 'drop', 'remove', 'annuler'
+    ];
+
+    const messageLower = message.toLowerCase();
+    return desinscriptionWords.some(word => messageLower.includes(word));
   }
 
   private async generateStructuredResponse(prompt: string): Promise<any> {
@@ -140,6 +156,7 @@ RÈGLES IMPORTANTES:
 Exemples de bonnes réponses:
 - "Vous êtes inscrit à 3 cours: MTH1007 (3 crédits), INF1120 (3 crédits), FRA1002 (2 crédits). Total: 8 crédits."
 - "Inscription réussie pour: Calcul I (MTH1007). Vous avez maintenant 4 cours ce trimestre."
+- "Désinscription réussie: INF1563 - Programmation I. Cours retiré de votre horaire."
 - "Aucun cours trouvé. Veuillez vérifier votre code permanent."
 
 Réponds maintenant:`;
@@ -150,9 +167,9 @@ Réponds maintenant:`;
         prompt: prompt,
         stream: false,
         options: {
-          temperature: 0.3, // Lower temperature for more consistent responses
-          num_predict: 200,  // Limit response length
-          stop: ['\n\n', 'Cordialement', 'Merci', 'Bonjour'] // Stop on these words
+          temperature: 0.3,
+          num_predict: 200,
+          stop: ['\n\n', 'Cordialement', 'Merci', 'Bonjour']
         }
       });
 
