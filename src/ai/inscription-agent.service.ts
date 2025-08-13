@@ -14,14 +14,8 @@ export class InscriptionAgentService {
   async processStudentRequest(message: string, codePermanent?: string): Promise<any> {
     try {
       const intent = await this.aiService.analyzeInscriptionRequest(message);
-
-      // Obtenir le contexte étudiant si disponible
       const studentContext = codePermanent ? await this.getStudentContext(codePermanent) : null;
-
-      // Exécuter l'opération demandée
       const results = await this.executeOperation(intent, studentContext);
-
-      // Générer une réponse directe
       const response = await this.generateContextualResponse(intent, results, studentContext);
 
       return {
@@ -44,7 +38,6 @@ export class InscriptionAgentService {
 
   private async getStudentContext(codePermanent: string): Promise<any> {
     try {
-      // Use Prisma method to get student
       const etudiant = await this.databaseService.etudiants.findUnique({
         where: { code_permanant: codePermanent },
         include: {
@@ -56,7 +49,6 @@ export class InscriptionAgentService {
         throw new Error('Étudiant non trouvé');
       }
 
-      // Get current inscriptions
       const inscriptions = await this.databaseService.inscription.findMany({
         where: {
           code_permanant: codePermanent,
